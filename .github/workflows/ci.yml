@@ -1,0 +1,172 @@
+name: PowerShell Security Framework CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: PSScriptAnalyzer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error,Warning -ExcludeRule PSAvoidUsingWriteHost
+          $results | Format-Table -AutoSize
+          if ($results.Count -gt 0) {
+            Write-Error "PSScriptAnalyzer found $($results.Count) issue(s)"
+            exit 1
+          }
+
+  test:
+    name: Pester Tests
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -Force -Scope CurrentUser -MinimumVersion 5.0.0
+
+      - name: Run Pester Tests
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = 'TestResults.xml'
+          $config.TestResult.OutputFormat = 'NUnitXml'
+          Invoke-Pester -Configuration $config
+
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: TestResults.xml
+
+  validate-templates:
+    name: Validate Templates
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Validate Template Syntax
+        shell: pwsh
+        run: |
+          $templates = Get-ChildItem -Path ./Templates -Filter '*.ps1' -Recurse
+          $errors = @()
+          
+          foreach ($template in $templates) {
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($template.FullName, [ref]$null, [ref]$parseErrors)
+            
+            if ($parseErrors.Count -gt 0) {
+              $errors += [PSCustomObject]@{
+                File = $template.Name
+                Errors = $parseErrors
+              }
+            }
+          }
+          
+          if ($errors.Count -gt 0) {
+            $errors | Format-List
+            Write-Error "Template syntax validation failed"
+            exit 1
+          }
+          
+          Write-Host "All $($templates.Count) templates passed syntax validation" -ForegroundColor Green
+
+      - name: Check Template Standards
+        shell: pwsh
+        run: |
+          $templates = Get-ChildItem -Path ./Templates -Filter '*.ps1' -Recurse
+          $issues = [System.Collections.Generic.List[string]]::new()
+          
+          foreach ($template in $templates) {
+            $content = Get-Content $template.FullName -Raw
+            
+            # Check for #Requires statement
+            if ($content -notmatch '#Requires\s+-Version\s+7\.\d+') {
+              $issues.Add("$($template.Name): Missing '#Requires -Version 7.x'")
+            }
+            
+            # Check for CmdletBinding
+            if ($content -notmatch '\[CmdletBinding\(') {
+              $issues.Add("$($template.Name): Missing [CmdletBinding()]")
+            }
+            
+            # Check for Set-StrictMode
+            if ($content -notmatch 'Set-StrictMode\s+-Version\s+Latest') {
+              $issues.Add("$($template.Name): Missing 'Set-StrictMode -Version Latest'")
+            }
+          }
+          
+          if ($issues.Count -gt 0) {
+            $issues | ForEach-Object { Write-Warning $_ }
+            Write-Error "Template standards check failed with $($issues.Count) issue(s)"
+            exit 1
+          }
+          
+          Write-Host "All templates meet standards" -ForegroundColor Green
+
+  security-scan:
+    name: Security Scan
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Security Pattern Check
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path . -Include '*.ps1','*.psm1' -Recurse -File
+          $issues = [System.Collections.Generic.List[PSCustomObject]]::new()
+          
+          $dangerousPatterns = @(
+            @{ Pattern = 'ConvertTo-SecureString.*-AsPlainText'; Message = 'Hardcoded password pattern detected' }
+            @{ Pattern = '\$env:.*PASSWORD'; Message = 'Password in environment variable' }
+            @{ Pattern = 'Invoke-Expression'; Message = 'Invoke-Expression usage detected (potential code injection)' }
+            @{ Pattern = '\| iex'; Message = 'Pipeline to iex detected (potential code injection)' }
+          )
+          
+          foreach ($file in $files) {
+            $content = Get-Content $file.FullName -Raw
+            foreach ($check in $dangerousPatterns) {
+              if ($content -match $check.Pattern) {
+                $issues.Add([PSCustomObject]@{
+                  File = $file.Name
+                  Issue = $check.Message
+                })
+              }
+            }
+          }
+          
+          if ($issues.Count -gt 0) {
+            $issues | Format-Table -AutoSize
+            Write-Warning "Security scan found $($issues.Count) potential issue(s) - review required"
+          } else {
+            Write-Host "Security scan passed" -ForegroundColor Green
+          }

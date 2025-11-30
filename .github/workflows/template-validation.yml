@@ -1,0 +1,146 @@
+name: Template Validation
+
+on:
+  push:
+    paths:
+      - 'Templates/**'
+  pull_request:
+    paths:
+      - 'Templates/**'
+
+jobs:
+  validate-templates:
+    name: Validate Templates
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Template Standards Check
+        shell: pwsh
+        run: |
+          $templates = Get-ChildItem -Path ./Templates -Filter '*.ps1' -Recurse
+          $report = [System.Collections.Generic.List[PSCustomObject]]::new()
+          
+          foreach ($template in $templates) {
+            $content = Get-Content $template.FullName -Raw
+            $issues = [System.Collections.Generic.List[string]]::new()
+            $score = 100
+            
+            # Law Book Standards
+            $checks = @(
+              @{ Pattern = '#Requires\s+-Version\s+7\.\d+'; Name = 'Requires PS 7.x'; Weight = 10 }
+              @{ Pattern = '\[CmdletBinding\('; Name = 'CmdletBinding'; Weight = 10 }
+              @{ Pattern = 'Set-StrictMode\s+-Version\s+Latest'; Name = 'StrictMode'; Weight = 10 }
+              @{ Pattern = 'SupportsShouldProcess'; Name = 'SupportsShouldProcess'; Weight = 5 }
+              @{ Pattern = '\[OutputType\('; Name = 'OutputType'; Weight = 5 }
+              @{ Pattern = '\.SYNOPSIS'; Name = 'Help Synopsis'; Weight = 5 }
+              @{ Pattern = '\.DESCRIPTION'; Name = 'Help Description'; Weight = 5 }
+              @{ Pattern = '\.EXAMPLE'; Name = 'Help Example'; Weight = 5 }
+              @{ Pattern = 'ValidateNotNullOrEmpty|ValidateScript|ValidateSet'; Name = 'Parameter Validation'; Weight = 5 }
+              @{ Pattern = 'try\s*\{'; Name = 'Error Handling'; Weight = 10 }
+            )
+            
+            foreach ($check in $checks) {
+              if ($content -notmatch $check.Pattern) {
+                $issues.Add("Missing: $($check.Name)")
+                $score -= $check.Weight
+              }
+            }
+            
+            # Anti-patterns (deductions)
+            $antiPatterns = @(
+              @{ Pattern = 'Write-Host'; Name = 'Write-Host usage'; Weight = 5 }
+              @{ Pattern = '\$\w+\s*\+='; Name = 'Array += anti-pattern'; Weight = 10 }
+              @{ Pattern = 'Invoke-Expression|iex'; Name = 'Invoke-Expression'; Weight = 15 }
+            )
+            
+            foreach ($anti in $antiPatterns) {
+              if ($content -match $anti.Pattern) {
+                # Allow Write-Host with Justification attribute
+                if ($anti.Name -eq 'Write-Host usage' -and $content -match 'PSAvoidUsingWriteHost.*Justification') {
+                  continue
+                }
+                $issues.Add("Anti-pattern: $($anti.Name)")
+                $score -= $anti.Weight
+              }
+            }
+            
+            $report.Add([PSCustomObject]@{
+              Template = $template.Name
+              Score = [Math]::Max(0, $score)
+              Status = if ($score -ge 80) { 'PASS' } elseif ($score -ge 60) { 'WARN' } else { 'FAIL' }
+              Issues = if ($issues.Count -gt 0) { $issues -join '; ' } else { 'None' }
+            })
+          }
+          
+          Write-Host "## Template Validation Report" -ForegroundColor Cyan
+          Write-Host ""
+          $report | Format-Table -AutoSize
+          
+          $failed = $report | Where-Object Status -eq 'FAIL'
+          if ($failed.Count -gt 0) {
+            Write-Error "Template validation failed for $($failed.Count) template(s)"
+            exit 1
+          }
+          
+          $avgScore = ($report | Measure-Object -Property Score -Average).Average
+          Write-Host ""
+          Write-Host "Average Score: $([Math]::Round($avgScore, 1))/100" -ForegroundColor $(if ($avgScore -ge 80) { 'Green' } else { 'Yellow' })
+
+      - name: PSScriptAnalyzer on Templates
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path ./Templates -Recurse -Severity Error,Warning
+          
+          if ($results.Count -gt 0) {
+            Write-Host "::group::PSScriptAnalyzer Results"
+            $results | Format-Table -Property ScriptName, Line, Severity, RuleName -AutoSize
+            Write-Host "::endgroup::"
+            
+            $errors = $results | Where-Object Severity -eq 'Error'
+            if ($errors.Count -gt 0) {
+              Write-Error "Found $($errors.Count) error(s) in templates"
+              exit 1
+            }
+          } else {
+            Write-Host "All templates pass PSScriptAnalyzer" -ForegroundColor Green
+          }
+
+      - name: Syntax Validation
+        shell: pwsh
+        run: |
+          $templates = Get-ChildItem -Path ./Templates -Filter '*.ps1' -Recurse
+          $syntaxErrors = [System.Collections.Generic.List[PSCustomObject]]::new()
+          
+          foreach ($template in $templates) {
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $template.FullName,
+              [ref]$null,
+              [ref]$parseErrors
+            )
+            
+            if ($parseErrors.Count -gt 0) {
+              foreach ($error in $parseErrors) {
+                $syntaxErrors.Add([PSCustomObject]@{
+                  File = $template.Name
+                  Line = $error.Extent.StartLineNumber
+                  Error = $error.Message
+                })
+              }
+            }
+          }
+          
+          if ($syntaxErrors.Count -gt 0) {
+            $syntaxErrors | Format-Table -AutoSize
+            Write-Error "Syntax errors found in $($syntaxErrors.Count) location(s)"
+            exit 1
+          }
+          
+          Write-Host "All $($templates.Count) templates have valid syntax" -ForegroundColor Green

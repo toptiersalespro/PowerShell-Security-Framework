@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate:
+    name: Pre-Release Validation
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Modules
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer, Pester -Force -Scope CurrentUser
+
+      - name: Run Full Test Suite
+        shell: pwsh
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path = './tests'
+          $config.Output.Verbosity = 'Detailed'
+          $config.Run.Exit = $true
+          Invoke-Pester -Configuration $config
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          if ($results.Count -gt 0) {
+            $results | Format-Table -AutoSize
+            Write-Error "Release blocked: PSScriptAnalyzer found errors"
+            exit 1
+          }
+
+  build:
+    name: Build Release
+    runs-on: windows-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get Version from Tag
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          Write-Host "Version: $version"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Update Module Manifest
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $manifestPath = './SecurityFramework.psd1'
+          
+          if (Test-Path $manifestPath) {
+            $manifest = Get-Content $manifestPath -Raw
+            $manifest = $manifest -replace "ModuleVersion\s*=\s*'[^']*'", "ModuleVersion = '$version'"
+            Set-Content $manifestPath -Value $manifest
+            Write-Host "Updated manifest to version $version"
+          }
+
+      - name: Create Release Package
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $packageDir = "./release/PowerShell-Security-Framework-$version"
+          
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          
+          # Copy core files
+          Copy-Item -Path './SecurityFramework.psd1' -Destination $packageDir -ErrorAction SilentlyContinue
+          Copy-Item -Path './SecurityFramework.psm1' -Destination $packageDir -ErrorAction SilentlyContinue
+          Copy-Item -Path './framework.ps1' -Destination $packageDir -ErrorAction SilentlyContinue
+          Copy-Item -Path './README.md' -Destination $packageDir -ErrorAction SilentlyContinue
+          
+          # Copy directories
+          Copy-Item -Path './modules' -Destination $packageDir -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path './Templates' -Destination $packageDir -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path './config' -Destination $packageDir -Recurse -ErrorAction SilentlyContinue
+          Copy-Item -Path './docs' -Destination $packageDir -Recurse -ErrorAction SilentlyContinue
+          
+          # Create ZIP
+          Compress-Archive -Path $packageDir -DestinationPath "./release/PowerShell-Security-Framework-$version.zip"
+          Write-Host "Created release package"
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: ./release/*.zip
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Release Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: ./release
+
+      - name: Generate Release Notes
+        id: notes
+        shell: bash
+        run: |
+          echo "## What's Changed" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD^)..HEAD >> RELEASE_NOTES.md 2>/dev/null || echo "- Initial release" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "## Installation" >> RELEASE_NOTES.md
+          echo '```powershell' >> RELEASE_NOTES.md
+          echo 'Expand-Archive -Path PowerShell-Security-Framework-*.zip -DestinationPath $HOME/Documents/PowerShell/Modules/' >> RELEASE_NOTES.md
+          echo 'Import-Module PowerShell-Security-Framework' >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release/*.zip
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: true

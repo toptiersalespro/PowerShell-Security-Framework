@@ -1,0 +1,150 @@
+name: PR Quality Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Modules
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer, Pester -Force -Scope CurrentUser
+
+      - name: Check Changed Files
+        id: changed
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.head.sha }}"
+          
+          $changedFiles = git diff --name-only $base $head | Where-Object { $_ -match '\.(ps1|psm1|psd1)$' }
+          
+          if ($changedFiles.Count -eq 0) {
+            Write-Host "No PowerShell files changed"
+            echo "HAS_PS_CHANGES=false" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "Changed PowerShell files:"
+            $changedFiles | ForEach-Object { Write-Host "  - $_" }
+            echo "HAS_PS_CHANGES=true" >> $env:GITHUB_OUTPUT
+            echo "CHANGED_FILES=$($changedFiles -join ',')" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Lint Changed Files
+        if: steps.changed.outputs.HAS_PS_CHANGES == 'true'
+        shell: pwsh
+        run: |
+          $changedFiles = "${{ steps.changed.outputs.CHANGED_FILES }}" -split ','
+          $allResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+          
+          foreach ($file in $changedFiles) {
+            if (Test-Path $file) {
+              $results = Invoke-ScriptAnalyzer -Path $file -Severity Error,Warning
+              if ($results) {
+                $allResults.AddRange($results)
+              }
+            }
+          }
+          
+          if ($allResults.Count -gt 0) {
+            Write-Host "::group::PSScriptAnalyzer Results"
+            $allResults | Format-Table -Property ScriptName, Line, Severity, RuleName, Message -AutoSize
+            Write-Host "::endgroup::"
+            
+            $errors = $allResults | Where-Object Severity -eq 'Error'
+            if ($errors.Count -gt 0) {
+              Write-Error "Quality gate failed: $($errors.Count) error(s) found"
+              exit 1
+            }
+            
+            Write-Warning "$($allResults.Count) warning(s) found - please review"
+          }
+
+      - name: Run Related Tests
+        if: steps.changed.outputs.HAS_PS_CHANGES == 'true'
+        shell: pwsh
+        run: |
+          $changedFiles = "${{ steps.changed.outputs.CHANGED_FILES }}" -split ','
+          $testFiles = [System.Collections.Generic.List[string]]::new()
+          
+          foreach ($file in $changedFiles) {
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($file)
+            $testPattern = "./tests/*$baseName*.Tests.ps1"
+            $matchingTests = Get-ChildItem -Path $testPattern -ErrorAction SilentlyContinue
+            
+            foreach ($test in $matchingTests) {
+              if (-not $testFiles.Contains($test.FullName)) {
+                $testFiles.Add($test.FullName)
+              }
+            }
+          }
+          
+          if ($testFiles.Count -gt 0) {
+            Write-Host "Running related tests:"
+            $testFiles | ForEach-Object { Write-Host "  - $_" }
+            
+            $config = New-PesterConfiguration
+            $config.Run.Path = $testFiles.ToArray()
+            $config.Output.Verbosity = 'Detailed'
+            $config.Run.Exit = $true
+            Invoke-Pester -Configuration $config
+          } else {
+            Write-Host "No related tests found for changed files"
+          }
+
+      - name: Check Commit Messages
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.head.sha }}"
+          
+          $commits = git log --format="%s" $base..$head
+          $issues = [System.Collections.Generic.List[string]]::new()
+          
+          foreach ($message in $commits) {
+            # Check for reasonable length
+            if ($message.Length -lt 10) {
+              $issues.Add("Commit message too short: '$message'")
+            }
+            
+            # Check for imperative mood (rough check)
+            if ($message -match '^(Added|Fixed|Changed|Updated|Removed)\s') {
+              $issues.Add("Use imperative mood: '$message' -> Use 'Add', 'Fix', 'Change', etc.")
+            }
+          }
+          
+          if ($issues.Count -gt 0) {
+            Write-Warning "Commit message suggestions:"
+            $issues | ForEach-Object { Write-Warning "  - $_" }
+          }
+
+      - name: Generate PR Summary
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          $head = "${{ github.event.pull_request.head.sha }}"
+          
+          $stats = git diff --stat $base $head | Select-Object -Last 1
+          $changedFiles = git diff --name-only $base $head
+          
+          Write-Host "## PR Summary" -ForegroundColor Cyan
+          Write-Host "Files changed: $($changedFiles.Count)"
+          Write-Host "Stats: $stats"
+          
+          $psFiles = $changedFiles | Where-Object { $_ -match '\.(ps1|psm1|psd1)$' }
+          $testFiles = $changedFiles | Where-Object { $_ -match '\.Tests\.ps1$' }
+          $docsFiles = $changedFiles | Where-Object { $_ -match '\.(md|txt)$' }
+          
+          Write-Host ""
+          Write-Host "Breakdown:"
+          Write-Host "  - PowerShell files: $($psFiles.Count)"
+          Write-Host "  - Test files: $($testFiles.Count)"
+          Write-Host "  - Documentation: $($docsFiles.Count)"
