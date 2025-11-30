@@ -10,7 +10,7 @@ jobs:
     name: Pre-Release Validation
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Modules
         shell: pwsh
@@ -42,7 +42,7 @@ jobs:
     runs-on: windows-latest
     needs: validate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get Version from Tag
         id: version
@@ -102,7 +102,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download Release Artifact
         uses: actions/download-artifact@v4
