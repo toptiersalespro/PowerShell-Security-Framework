@@ -1,0 +1,9 @@
+{
+    "BaseUrl": "https://api.example.com",
+    "ApiKeyHeaderName": "Authorization",
+    "ApiKey": "Bearer YOUR_TOKEN_HERE",
+    "Headers": {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+}
