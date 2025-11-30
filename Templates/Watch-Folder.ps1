@@ -2,208 +2,124 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-<#
-.SYNOPSIS
-    File system watcher template.
-
-.DESCRIPTION
-    Monitors a folder for changes (create, change, delete, rename).
-    Logs events and optionally runs a handler script.
-    Follows TPRS v1.1 and 40 Laws compliance.
-
-.PARAMETER Path
-    Folder path to watch.
-
-.PARAMETER Filter
-    File filter (e.g. *.txt). Default: *.*
-
-.PARAMETER HandlerScript
-    Optional .ps1 script to run when an event occurs.
-
-.PARAMETER TimeoutSeconds
-    How long to run before exiting. 0 = run until Ctrl+C.
-
-.PARAMETER IncludeSubdirectories
-    Whether to watch subdirectories. Default: $true
-
-.OUTPUTS
-    [void] - Runs until timeout or manual stop
-
-.EXAMPLE
-    .\Watch-Folder.ps1 -Path C:\Inbox -Filter "*.pdf"
-    Watches for PDF files in the Inbox folder.
-
-.EXAMPLE
-    .\Watch-Folder.ps1 -Path C:\Inbox -HandlerScript .\Process-File.ps1 -TimeoutSeconds 3600
-    Watches for 1 hour and runs handler on each event.
-
-.NOTES
-    Author: Kyle Thompson
-    Version: 1.0.0
-    Compliance: TPRS v1.1 | 40 Laws | Zero-Defect
-#>
-
-#region Module Constants
-
-$script:LogPath = Join-Path -Path $PSScriptRoot -ChildPath 'logs'
-$script:LogFile = Join-Path -Path $script:LogPath -ChildPath 'watcher.log'
-
-#endregion
-
-#region Parameters
-
-[CmdletBinding()]
-[OutputType([void])]
-param (
-    [Parameter(Mandatory)]
-    [ValidateScript({ Test-Path $_ -PathType Container })]
-    [string]$Path,
-
-    [Parameter()]
-    [ValidateNotNullOrEmpty()]
-    [string]$Filter = '*.*',
-
-    [Parameter()]
-    [ValidateScript({
-        if ([string]::IsNullOrWhiteSpace($_)) { return $true }
-        Test-Path $_ -PathType Leaf
-    })]
-    [string]$HandlerScript,
-
-    [Parameter()]
-    [ValidateRange(0, 86400)]
-    [int]$TimeoutSeconds = 0,
-
-    [Parameter()]
-    [bool]$IncludeSubdirectories = $true
-)
-
-#endregion
-
-#region Private Functions
-
-function Write-WatcherLog {
-    <#
-    .SYNOPSIS
-        Writes structured log entries.
-    #>
+function Write-TemplateLog {
     [CmdletBinding()]
     [OutputType([void])]
-    param (
+    param(
         [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
         [string]$Message,
 
         [Parameter()]
-        [ValidateSet('INFO', 'WARN', 'ERROR')]
-        [string]$Level = 'INFO'
+        [ValidateSet('INFO','WARN','ERROR')]
+        [string]$Level = 'INFO',
+
+        [Parameter()]
+        [string]$LogFile = '.\logs\watcher.log'
     )
 
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $entry = "$timestamp [$Level] $Message"
 
-    if (-not (Test-Path $script:LogPath)) {
-        New-Item -ItemType Directory -Path $script:LogPath -Force | Out-Null
-    }
-
-    $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8
-
     switch ($Level) {
-        'INFO'  { Write-Verbose $entry }
-        'WARN'  { Write-Warning $Message }
-        'ERROR' { Write-Error $Message }
+        'INFO'  { Write-Information -MessageData $entry -InformationAction Continue }
+        'WARN'  { Write-Warning -Message $entry }
+        'ERROR' { Write-Warning -Message "[ERROR] $entry" }
     }
+
+    $logDir = Split-Path -Path $LogFile -Parent
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        $null = New-Item -ItemType Directory -Path $logDir -Force
+    }
+
+    $entry | Out-File -FilePath $LogFile -Append -Encoding UTF8
 }
 
-#endregion
+[CmdletBinding()]
+param (
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
 
-#region Main Execution
+    [Parameter()]
+    [string]$Filter = '*.*',
 
-# Create FileSystemWatcher
-$fsw = [System.IO.FileSystemWatcher]::new()
-$fsw.Path = (Resolve-Path $Path).Path
-$fsw.Filter = $Filter
-$fsw.IncludeSubdirectories = $IncludeSubdirectories
-$fsw.EnableRaisingEvents = $true
+    [Parameter()]
+    [string]$HandlerScript,
 
-Write-WatcherLog -Message "Watching '$($fsw.Path)' for '$Filter' changes..."
+    [Parameter()]
+    [int]$TimeoutSeconds = 0
+)
 
-# Capture handler script path for use in action block
-$handlerPath = $HandlerScript
+$logFile = '.\logs\watcher.log'
 
-# Event action script block
-$eventAction = {
-    param($sender, $eventArgs)
+if (-not (Test-Path -LiteralPath $Path)) {
+    Write-TemplateLog -Message "Path does not exist: $Path" -Level 'ERROR' -LogFile $logFile
+    exit 1
+}
 
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+$hasHandler  = -not [string]::IsNullOrWhiteSpace($HandlerScript)
+$handlerPath = $null
 
-    # Safe property access with null checks
-    $changeType = if ($null -ne $eventArgs.ChangeType) { $eventArgs.ChangeType.ToString() } else { 'Unknown' }
-    $fileName = if (-not [string]::IsNullOrWhiteSpace($eventArgs.Name)) { $eventArgs.Name } else { 'Unknown' }
-    $fullPath = if (-not [string]::IsNullOrWhiteSpace($eventArgs.FullPath)) { $eventArgs.FullPath } else { 'Unknown' }
-
-    $msg = "[$timestamp] File event: ChangeType=$changeType; Name=$fileName; FullPath=$fullPath"
-
-    # Write to console and log
-    Write-Host $msg -ForegroundColor Cyan
-
-    $logFile = Join-Path -Path $using:script:LogPath -ChildPath 'watcher.log'
-    if (Test-Path (Split-Path $logFile)) {
-        $msg | Out-File -FilePath $logFile -Append -Encoding UTF8
+if ($hasHandler) {
+    if (-not (Test-Path -LiteralPath $HandlerScript)) {
+        Write-TemplateLog -Message "HandlerScript not found: $HandlerScript" -Level 'ERROR' -LogFile $logFile
+        exit 1
     }
+    $handlerPath = (Resolve-Path -LiteralPath $HandlerScript).Path
+    Write-TemplateLog -Message "Using handler script: $handlerPath" -LogFile $logFile
+} else {
+    Write-TemplateLog -Message 'No handler script specified; events will only be logged.' -Level 'WARN' -LogFile $logFile
+}
 
-    # Execute handler if specified (with null check - SIN #2 FIX)
-    $handler = $using:handlerPath
-    if (-not [string]::IsNullOrWhiteSpace($handler) -and (Test-Path $handler)) {
+$fsw = [System.IO.FileSystemWatcher]::new()
+$fsw.Path                  = (Resolve-Path -LiteralPath $Path).Path
+$fsw.Filter                = $Filter
+$fsw.IncludeSubdirectories = $true
+$fsw.EnableRaisingEvents   = $true
+
+Write-TemplateLog -Message \"Watching '\$(\$fsw.Path)' for filter '\$Filter'...\" -LogFile \$logFile
+
+# Event action scriptblock - $source required by .NET event signature (PSScriptAnalyzer false positive)
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'source', Justification = 'Required by .NET event delegate signature')]
+$action = {
+    # $source is required by .NET event signature but not used
+    param([object]$source, [System.IO.FileSystemEventArgs]$e)
+
+    $msg = "File event: ChangeType=$($e.ChangeType); Name=$($e.Name); FullPath=$($e.FullPath)"
+    Write-TemplateLog -Message $msg -LogFile $using:logFile
+
+    if ($using:hasHandler -and $using:handlerPath) {
         try {
-            & $handler -FullPath $fullPath -ChangeType $changeType
+            & $using:handlerPath -FullPath $e.FullPath -ChangeType $e.ChangeType
         }
         catch {
-            $errMsg = "[$timestamp] [ERROR] HandlerScript error: $($_.Exception.Message)"
-            Write-Host $errMsg -ForegroundColor Red
-            if (Test-Path (Split-Path $logFile)) {
-                $errMsg | Out-File -FilePath $logFile -Append -Encoding UTF8
-            }
+            Write-TemplateLog -Message "HandlerScript error: $_" -Level 'ERROR' -LogFile $using:logFile
         }
     }
 }
 
-# Register events
-$registrations = [System.Collections.Generic.List[System.Management.Automation.PSEventJob]]::new()
-
-$registrations.Add((Register-ObjectEvent -InputObject $fsw -EventName Created -Action $eventAction))
-$registrations.Add((Register-ObjectEvent -InputObject $fsw -EventName Changed -Action $eventAction))
-$registrations.Add((Register-ObjectEvent -InputObject $fsw -EventName Deleted -Action $eventAction))
-$registrations.Add((Register-ObjectEvent -InputObject $fsw -EventName Renamed -Action $eventAction))
-
-Write-WatcherLog -Message "Registered 4 event handlers (Created, Changed, Deleted, Renamed)."
+$createdReg = Register-ObjectEvent -InputObject $fsw -EventName Created -Action $action
+$changedReg = Register-ObjectEvent -InputObject $fsw -EventName Changed -Action $action
+$deletedReg = Register-ObjectEvent -InputObject $fsw -EventName Deleted -Action $action
+$renamedReg = Register-ObjectEvent -InputObject $fsw -EventName Renamed -Action $action
 
 try {
     if ($TimeoutSeconds -gt 0) {
-        Write-WatcherLog -Message "Watcher will run for $TimeoutSeconds second(s)..."
+        Write-TemplateLog -Message "Watcher will run for $TimeoutSeconds second(s)..." -LogFile $logFile
         Start-Sleep -Seconds $TimeoutSeconds
-    }
-    else {
-        Write-WatcherLog -Message 'Press Ctrl+C to stop watching.'
+    } else {
+        Write-TemplateLog -Message 'Press Ctrl+C to stop watching.' -LogFile $logFile
         while ($true) {
             Start-Sleep -Seconds 5
         }
     }
 }
 finally {
-    Write-WatcherLog -Message 'Stopping watcher and unregistering events.'
+    Write-TemplateLog -Message 'Stopping watcher and unregistering events.' -LogFile $logFile
 
-    foreach ($reg in $registrations) {
-        if ($null -ne $reg) {
-            Unregister-Event -SubscriptionId $reg.Id -ErrorAction SilentlyContinue
-            Remove-Job -Job $reg -Force -ErrorAction SilentlyContinue
-        }
-    }
+    $createdReg | Unregister-Event -ErrorAction SilentlyContinue
+    $changedReg | Unregister-Event -ErrorAction SilentlyContinue
+    $deletedReg | Unregister-Event -ErrorAction SilentlyContinue
+    $renamedReg | Unregister-Event -ErrorAction SilentlyContinue
 
-    $fsw.EnableRaisingEvents = $false
     $fsw.Dispose()
-
-    Write-WatcherLog -Message 'Watcher stopped.'
 }
-
-#endregion

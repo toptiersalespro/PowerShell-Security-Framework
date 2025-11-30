@@ -2,173 +2,107 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-<#
-.SYNOPSIS
-    Generic REST API caller with config, logging, and error handling.
+function Write-TemplateLog {
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message,
 
-.DESCRIPTION
-    Uses JSON config for base URL, headers, and API keys. Supports GET/POST/PUT/DELETE/PATCH with JSON body.
-    Follows TPRS v1.1 and 40 Laws compliance.
+        [Parameter()]
+        [ValidateSet('INFO','WARN','ERROR')]
+        [string]$Level = 'INFO',
 
-.PARAMETER Endpoint
-    Relative API endpoint, e.g. "/v1/items"
+        [Parameter()]
+        [string]$LogFile = '.\logs\restapi.log'
+    )
 
-.PARAMETER Method
-    HTTP method (GET, POST, PUT, DELETE, PATCH)
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $entry = "$timestamp [$Level] $Message"
 
-.PARAMETER BodyFile
-    Optional path to JSON file used as request body.
+    switch ($Level) {
+        'INFO'  { Write-Information -MessageData $entry -InformationAction Continue }
+        'WARN'  { Write-Warning -Message $entry }
+        'ERROR' { Write-Warning -Message "[ERROR] $entry" }
+    }
 
-.PARAMETER ConfigFile
-    JSON config file containing BaseUrl and Headers.
+    $logDir = Split-Path -Path $LogFile -Parent
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        $null = New-Item -ItemType Directory -Path $logDir -Force
+    }
 
-.OUTPUTS
-    [PSCustomObject] - API response object
+    $entry | Out-File -FilePath $LogFile -Append -Encoding UTF8
+}
 
-.EXAMPLE
-    .\Invoke-RestApi.ps1 -Endpoint "/v1/items" -Method GET -ConfigFile .\api-config.json
-    Retrieves items from the API.
+function Import-Config {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
 
-.EXAMPLE
-    .\Invoke-RestApi.ps1 -Endpoint "/v1/items" -Method POST -BodyFile ".\new-item.json"
-    Creates a new item using the JSON body file.
+        [Parameter()]
+        [string]$LogFile = '.\logs\restapi.log'
+    )
 
-.NOTES
-    Author: Kyle Thompson
-    Version: 1.0.0
-    Compliance: TPRS v1.1 | 40 Laws | Zero-Defect
-#>
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-TemplateLog -Message "Config file not found at path: $Path" -Level 'WARN' -LogFile $LogFile
+        return $null
+    }
 
-#region Module Constants
-
-$script:LogPath = Join-Path -Path $PSScriptRoot -ChildPath 'logs'
-$script:LogFile = Join-Path -Path $script:LogPath -ChildPath 'restapi.log'
-
-#endregion
-
-#region Parameters
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-TemplateLog -Message "Config file at $Path is empty." -Level 'WARN' -LogFile $LogFile
+            return $null
+        }
+        return $raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-TemplateLog -Message "Failed to parse config at $Path. $_" -Level 'ERROR' -LogFile $LogFile
+        return $null
+    }
+}
 
 [CmdletBinding()]
-[OutputType([PSCustomObject])]
+[OutputType([psobject])]
 param (
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory = $true)]
     [string]$Endpoint,
 
-    [Parameter(Mandatory)]
-    [ValidateSet('GET', 'POST', 'PUT', 'DELETE', 'PATCH')]
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('GET','POST','PUT','DELETE','PATCH')]
     [string]$Method,
 
     [Parameter()]
-    [ValidateScript({ Test-Path $_ -PathType Leaf })]
     [string]$BodyFile,
 
     [Parameter()]
     [string]$ConfigFile = '.\api-config.json'
 )
 
-#endregion
+$logFile = '.\logs\restapi.log'
 
-#region Private Functions
-
-function Write-ApiLog {
-    <#
-    .SYNOPSIS
-        Writes structured log entries.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param (
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Message,
-
-        [Parameter()]
-        [ValidateSet('INFO', 'WARN', 'ERROR')]
-        [string]$Level = 'INFO'
-    )
-
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $entry = "$timestamp [$Level] $Message"
-
-    # Ensure log directory exists
-    if (-not (Test-Path $script:LogPath)) {
-        New-Item -ItemType Directory -Path $script:LogPath -Force | Out-Null
-    }
-
-    # Write to file (pipeline-friendly, no Write-Host)
-    $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8
-
-    # Use appropriate stream
-    switch ($Level) {
-        'INFO'  { Write-Verbose $entry }
-        'WARN'  { Write-Warning $Message }
-        'ERROR' { Write-Error $Message }
-    }
-}
-
-function Import-ApiConfig {
-    <#
-    .SYNOPSIS
-        Imports and validates API configuration.
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param (
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Path
-    )
-
-    if (-not (Test-Path $Path)) {
-        Write-ApiLog -Message "Config file not found: $Path" -Level 'ERROR'
-        return $null
-    }
-
-    try {
-        $content = Get-Content -Path $Path -Raw -ErrorAction Stop
-
-        # SIN #2 FIX: Null check before method call
-        if ([string]::IsNullOrWhiteSpace($content)) {
-            Write-ApiLog -Message "Config file is empty: $Path" -Level 'ERROR'
-            return $null
-        }
-
-        return $content | ConvertFrom-Json
-    }
-    catch {
-        Write-ApiLog -Message "Failed to parse config file: $($_.Exception.Message)" -Level 'ERROR'
-        return $null
-    }
-}
-
-#endregion
-
-#region Main Execution
-
-# Load configuration
-$config = Import-ApiConfig -Path $ConfigFile
-if (-not $config) {
+$config = Import-Config -Path $ConfigFile -LogFile $logFile
+if (-not $config -or [string]::IsNullOrWhiteSpace($config.BaseUrl)) {
+    Write-TemplateLog -Message "BaseUrl not defined in config '$ConfigFile'." -Level 'ERROR' -LogFile $logFile
     exit 1
 }
 
-# SIN #2 FIX: Null check before TrimEnd
-$baseUrl = if ([string]::IsNullOrWhiteSpace($config.BaseUrl)) {
-    Write-ApiLog -Message "BaseUrl not defined in config. Add 'BaseUrl' property." -Level 'ERROR'
-    exit 1
-} else {
-    $config.BaseUrl.TrimEnd('/')
+$baseUrl = $config.BaseUrl
+if (-not [string]::IsNullOrWhiteSpace($baseUrl)) {
+    $baseUrl = $baseUrl.TrimEnd('/')
 }
 
-# SIN #2 FIX: Null check before TrimStart
-$safeEndpoint = if ([string]::IsNullOrWhiteSpace($Endpoint)) {
+$endpointPart = if ([string]::IsNullOrWhiteSpace($Endpoint)) {
     ''
 } else {
     $Endpoint.TrimStart('/')
 }
 
-$uri = "$baseUrl/$safeEndpoint"
-Write-ApiLog -Message "Target URI: $uri (Method: $Method)"
+$uri = if ($endpointPart) { "$baseUrl/$endpointPart" } else { $baseUrl }
+
+Write-TemplateLog -Message "Target URI: $uri (Method: $Method)" -LogFile $logFile
 
 # Build headers
 $headers = @{}
@@ -178,24 +112,25 @@ if ($config.Headers) {
     }
 }
 
-# Optional auth token
-if (-not [string]::IsNullOrWhiteSpace($config.ApiKey) -and
-    -not [string]::IsNullOrWhiteSpace($config.ApiKeyHeaderName)) {
+if ($config.ApiKey -and $config.ApiKeyHeaderName) {
     $headers[$config.ApiKeyHeaderName] = $config.ApiKey
 }
 
-# Request body
 $body = $null
-if (-not [string]::IsNullOrWhiteSpace($BodyFile)) {
-    if (-not (Test-Path $BodyFile)) {
-        Write-ApiLog -Message "BodyFile not found: $BodyFile" -Level 'ERROR'
+if ($BodyFile) {
+    if (-not (Test-Path -LiteralPath $BodyFile)) {
+        Write-TemplateLog -Message "BodyFile not found: $BodyFile" -Level 'ERROR' -LogFile $logFile
         exit 1
     }
-    $body = Get-Content -Path $BodyFile -Raw -ErrorAction Stop
-    Write-ApiLog -Message "Loaded body from $BodyFile"
+    $body = Get-Content -LiteralPath $BodyFile -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($body)) {
+        Write-TemplateLog -Message "Body file '$BodyFile' is empty." -Level 'WARN' -LogFile $logFile
+        $body = $null
+    } else {
+        Write-TemplateLog -Message "Loaded body from $BodyFile" -LogFile $logFile
+    }
 }
 
-# Execute request
 try {
     $invokeParams = @{
         Uri         = $uri
@@ -204,21 +139,18 @@ try {
         ErrorAction = 'Stop'
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($body)) {
-        $invokeParams['Body'] = $body
+    if ($body) {
+        $invokeParams['Body']        = $body
         $invokeParams['ContentType'] = 'application/json'
     }
 
-    Write-ApiLog -Message 'Sending HTTP request...'
+    Write-TemplateLog -Message 'Sending HTTP request...' -LogFile $logFile
     $response = Invoke-RestMethod @invokeParams
-    Write-ApiLog -Message 'Request completed successfully.'
+    Write-TemplateLog -Message 'Request completed successfully.' -LogFile $logFile
 
-    # Output response object for pipeline
     $response
 }
 catch {
-    Write-ApiLog -Message "HTTP request failed: $($_.Exception.Message)" -Level 'ERROR'
+    Write-TemplateLog -Message "HTTP request failed: $_" -Level 'ERROR' -LogFile $logFile
     exit 1
 }
-
-#endregion

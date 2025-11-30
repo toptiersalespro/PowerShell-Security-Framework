@@ -2,192 +2,124 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-<#
-.SYNOPSIS
-    Parallel worker template for bulk processing.
-
-.DESCRIPTION
-    Reads a list of items and processes them concurrently with robust logging and result aggregation.
-    Uses PowerShell 7+ ForEach-Object -Parallel for optimal performance.
-    Follows TPRS v1.1 and 40 Laws compliance.
-
-.PARAMETER InputFile
-    File with one work item per line (e.g. computer names).
-
-.PARAMETER ThrottleLimit
-    Max degree of parallelism. Default: 10.
-
-.PARAMETER ConfigFile
-    Optional JSON config.
-
-.OUTPUTS
-    [PSCustomObject[]] - Array of processing results
-
-.EXAMPLE
-    .\Invoke-ParallelProcess.ps1 -InputFile .\hosts.txt -ThrottleLimit 20
-    Processes all hosts in parallel with 20 concurrent threads.
-
-.NOTES
-    Author: Kyle Thompson
-    Version: 1.0.0
-    Compliance: TPRS v1.1 | 40 Laws | Zero-Defect
-#>
-
-#region Module Constants
-
-$script:LogPath = Join-Path -Path $PSScriptRoot -ChildPath 'logs'
-$script:LogFile = Join-Path -Path $script:LogPath -ChildPath 'parallel.log'
-
-#endregion
-
-#region Parameters
-
-[CmdletBinding()]
-[OutputType([PSCustomObject[]])]
-param (
-    [Parameter(Mandatory)]
-    [ValidateScript({ Test-Path $_ -PathType Leaf })]
-    [string]$InputFile,
-
-    [Parameter()]
-    [ValidateRange(1, 100)]
-    [int]$ThrottleLimit = 10,
-
-    [Parameter()]
-    [string]$ConfigFile = '.\parallel-config.json'
-)
-
-#endregion
-
-#region Private Functions
-
-function Write-ParallelLog {
-    <#
-    .SYNOPSIS
-        Writes structured log entries.
-    #>
+function Write-TemplateLog {
     [CmdletBinding()]
     [OutputType([void])]
-    param (
+    param(
         [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
         [string]$Message,
 
         [Parameter()]
-        [ValidateSet('INFO', 'WARN', 'ERROR')]
-        [string]$Level = 'INFO'
+        [ValidateSet('INFO','WARN','ERROR')]
+        [string]$Level = 'INFO',
+
+        [Parameter()]
+        [string]$LogFile = '.\logs\parallel.log'
     )
 
     $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     $entry = "$timestamp [$Level] $Message"
 
-    if (-not (Test-Path $script:LogPath)) {
-        New-Item -ItemType Directory -Path $script:LogPath -Force | Out-Null
-    }
-
-    $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8
-
     switch ($Level) {
-        'INFO'  { Write-Verbose $entry }
-        'WARN'  { Write-Warning $Message }
-        'ERROR' { Write-Error $Message }
+        'INFO'  { Write-Information -MessageData $entry -InformationAction Continue }
+        'WARN'  { Write-Warning -Message $entry }
+        'ERROR' { Write-Warning -Message "[ERROR] $entry" }
     }
+
+    $logDir = Split-Path -Path $LogFile -Parent
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        $null = New-Item -ItemType Directory -Path $logDir -Force
+    }
+
+    $entry | Out-File -FilePath $LogFile -Append -Encoding UTF8
 }
 
-function Import-ParallelConfig {
-    <#
-    .SYNOPSIS
-        Imports and validates configuration.
-    #>
+function Import-Config {
     [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param (
+    [OutputType([pscustomobject])]
+    param(
         [Parameter(Mandatory)]
-        [string]$Path
+        [string]$Path,
+
+        [Parameter()]
+        [string]$LogFile = '.\logs\parallel.log'
     )
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-TemplateLog -Message "Config file not found at path: $Path" -Level 'WARN' -LogFile $LogFile
         return $null
     }
 
     try {
-        $content = Get-Content -Path $Path -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($content)) {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-TemplateLog -Message "Config file at $Path is empty." -Level 'WARN' -LogFile $LogFile
             return $null
         }
-        return $content | ConvertFrom-Json
+        return $raw | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        Write-ParallelLog -Message "Failed to parse config: $($_.Exception.Message)" -Level 'ERROR'
+        Write-TemplateLog -Message "Failed to parse config at $Path. $_" -Level 'ERROR' -LogFile $LogFile
         return $null
     }
 }
 
-#endregion
+[CmdletBinding()]
+param (
+    [Parameter(Mandatory = $true)]
+    [string]$InputFile,
 
-#region Main Execution
+    [Parameter()]
+    [int]$Throttle = 10,
 
-# Load config (optional)
-$config = Import-ParallelConfig -Path $ConfigFile
+    [Parameter()]
+    [string]$ConfigFile = '.\parallel-config.json'
+)
 
-# Read input items with null-safe filtering
-$rawItems = Get-Content -Path $InputFile -ErrorAction Stop
+$logFile = '.\logs\parallel.log'
 
-# SIN #2 FIX: Safe null check before Trim
-$items = $rawItems | Where-Object {
-    -not [string]::IsNullOrWhiteSpace($_)
-} | ForEach-Object {
-    $_.Trim()
+if (-not (Test-Path -LiteralPath $InputFile)) {
+    Write-TemplateLog -Message "InputFile not found: $InputFile" -Level 'ERROR' -LogFile $logFile
+    exit 1
 }
 
-if ($items.Count -eq 0) {
-    Write-ParallelLog -Message 'No valid items found in input file.' -Level 'WARN'
-    exit 0
+$config = Import-Config -Path $ConfigFile -LogFile $logFile
+if ($config -and $config.Throttle) {
+    $Throttle = [int]$config.Throttle
 }
 
-Write-ParallelLog -Message "Loaded $($items.Count) items. Starting parallel processing with throttle $ThrottleLimit..."
+$items = Get-Content -LiteralPath $InputFile -ErrorAction Stop |
+         Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
-# Parallel processing block
+Write-TemplateLog -Message "Loaded $($items.Count) item(s). Starting parallel processing with throttle $Throttle..." -LogFile $logFile
+
 $results = $items | ForEach-Object -Parallel {
-    $item = $_
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $currentItem = $_
 
-    # Example work: ping test (customize as needed)
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+
     $reachable = $false
-    $errorMsg = $null
-
     try {
-        $ping = Test-Connection -ComputerName $item -Count 1 -Quiet -ErrorAction Stop
-        $reachable = [bool]$ping
+        $reachable = Test-Connection -ComputerName $currentItem -Count 1 -Quiet -ErrorAction Stop
     }
     catch {
         $reachable = $false
-        $errorMsg = $_.Exception.Message
     }
 
-    # Return typed result object
-    [PSCustomObject]@{
-        Timestamp = $timestamp
-        Target    = $item
+    [pscustomobject]@{
+        Timestamp = $ts
+        Target    = $currentItem
         Reachable = $reachable
-        Error     = $errorMsg
     }
-} -ThrottleLimit $ThrottleLimit
 
-Write-ParallelLog -Message 'Parallel work complete. Writing results...'
+} -ThrottleLimit $Throttle
 
-# SIN #3 FIX: Consistent return handling
-if ($null -eq $results -or $results.Count -eq 0) {
-    Write-ParallelLog -Message 'No results produced.' -Level 'WARN'
-    # Return empty typed array, not @()
-    return [PSCustomObject[]]@()
+Write-TemplateLog -Message 'Parallel work complete. Writing results...' -LogFile $logFile
+
+if ($results) {
+    $outFile = '.\parallel-results.csv'
+    $results | Sort-Object Target | Export-Csv -Path $outFile -NoTypeInformation
+    Write-TemplateLog -Message "Results written to $outFile" -LogFile $logFile
+} else {
+    Write-TemplateLog -Message 'No results produced.' -Level 'WARN' -LogFile $logFile
 }
-
-$outFile = Join-Path -Path $PSScriptRoot -ChildPath 'parallel-results.csv'
-$results | Sort-Object Target | Export-Csv -Path $outFile -NoTypeInformation
-Write-ParallelLog -Message "Results written to $outFile"
-
-# Output for pipeline
-$results
-
-#endregion

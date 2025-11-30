@@ -2,210 +2,135 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-<#
-.SYNOPSIS
-    Backup a folder and rotate old backups.
+function Write-TemplateLog {
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Message,
 
-.DESCRIPTION
-    Creates timestamped backups of a source directory under a backup root.
-    Keeps only the latest N backups and deletes older ones.
-    Supports -WhatIf and -Confirm for safe operation.
-    Follows TPRS v1.1 and 40 Laws compliance.
+        [Parameter()]
+        [ValidateSet('INFO','WARN','ERROR')]
+        [string]$Level = 'INFO',
 
-.PARAMETER SourcePath
-    Directory to back up.
+        [Parameter()]
+        [string]$LogFile = '.\logs\backup.log'
+    )
 
-.PARAMETER BackupRoot
-    Root backup directory.
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $entry = "$timestamp [$Level] $Message"
 
-.PARAMETER RetentionCount
-    Number of backups to retain. Default: 7.
+    switch ($Level) {
+        'INFO'  { Write-Information -MessageData $entry -InformationAction Continue }
+        'WARN'  { Write-Warning -Message $entry }
+        'ERROR' { Write-Warning -Message "[ERROR] $entry" }
+    }
 
-.PARAMETER ConfigFile
-    Optional JSON config.
+    $logDir = Split-Path -Path $LogFile -Parent
+    if ($logDir -and -not (Test-Path -LiteralPath $logDir)) {
+        $null = New-Item -ItemType Directory -Path $logDir -Force
+    }
 
-.OUTPUTS
-    [PSCustomObject] - Backup operation result
+    $entry | Out-File -FilePath $LogFile -Append -Encoding UTF8
+}
 
-.EXAMPLE
-    .\Backup-Rotate.ps1 -SourcePath C:\Data -BackupRoot D:\Backups -WhatIf
-    Shows what backup would be created without making changes.
+function Import-Config {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
 
-.EXAMPLE
-    .\Backup-Rotate.ps1 -SourcePath C:\Data -BackupRoot D:\Backups -RetentionCount 14
-    Creates backup and keeps last 14 copies.
+        [Parameter()]
+        [string]$LogFile = '.\logs\backup.log'
+    )
 
-.NOTES
-    Author: Kyle Thompson
-    Version: 1.0.0
-    Compliance: TPRS v1.1 | 40 Laws | Zero-Defect
-#>
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-TemplateLog -Message "Config file not found at path: $Path" -Level 'WARN' -LogFile $LogFile
+        return $null
+    }
 
-#region Module Constants
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-TemplateLog -Message "Config file at $Path is empty." -Level 'WARN' -LogFile $LogFile
+            return $null
+        }
+        return $raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-TemplateLog -Message "Failed to parse config at $Path. $_" -Level 'ERROR' -LogFile $LogFile
+        return $null
+    }
+}
 
-$script:LogPath = Join-Path -Path $PSScriptRoot -ChildPath 'logs'
-$script:LogFile = Join-Path -Path $script:LogPath -ChildPath 'backup.log'
-
-#endregion
-
-#region Parameters
-
-[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
-[OutputType([PSCustomObject])]
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
 param (
-    [Parameter(Mandatory)]
-    [ValidateScript({ Test-Path $_ -PathType Container })]
+    [Parameter(Mandatory = $true)]
     [string]$SourcePath,
 
-    [Parameter(Mandatory)]
-    [ValidateNotNullOrEmpty()]
+    [Parameter(Mandatory = $true)]
     [string]$BackupRoot,
 
     [Parameter()]
-    [ValidateRange(1, 365)]
     [int]$RetentionCount = 7,
 
     [Parameter()]
     [string]$ConfigFile = '.\backup-config.json'
 )
 
-#endregion
+$logFile = '.\logs\backup.log'
 
-#region Private Functions
-
-function Write-BackupLog {
-    <#
-    .SYNOPSIS
-        Writes structured log entries.
-    #>
-    [CmdletBinding()]
-    [OutputType([void])]
-    param (
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Message,
-
-        [Parameter()]
-        [ValidateSet('INFO', 'WARN', 'ERROR')]
-        [string]$Level = 'INFO'
-    )
-
-    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    $entry = "$timestamp [$Level] $Message"
-
-    if (-not (Test-Path $script:LogPath)) {
-        New-Item -ItemType Directory -Path $script:LogPath -Force | Out-Null
-    }
-
-    $entry | Out-File -FilePath $script:LogFile -Append -Encoding UTF8
-
-    switch ($Level) {
-        'INFO'  { Write-Verbose $entry }
-        'WARN'  { Write-Warning $Message }
-        'ERROR' { Write-Error $Message }
-    }
-}
-
-function Import-BackupConfig {
-    <#
-    .SYNOPSIS
-        Imports and validates configuration.
-    #>
-    [CmdletBinding()]
-    [OutputType([PSCustomObject])]
-    param (
-        [Parameter(Mandatory)]
-        [string]$Path
-    )
-
-    if (-not (Test-Path $Path)) {
-        return $null
-    }
-
-    try {
-        $content = Get-Content -Path $Path -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($content)) {
-            return $null
-        }
-        return $content | ConvertFrom-Json
-    }
-    catch {
-        Write-BackupLog -Message "Failed to parse config: $($_.Exception.Message)" -Level 'ERROR'
-        return $null
-    }
-}
-
-#endregion
-
-#region Main Execution
-
-# Merge config if present
-$config = Import-BackupConfig -Path $ConfigFile
+$config = Import-Config -Path $ConfigFile -LogFile $logFile
 if ($config) {
-    if (-not [string]::IsNullOrWhiteSpace($config.SourcePath)) { $SourcePath = $config.SourcePath }
-    if (-not [string]::IsNullOrWhiteSpace($config.BackupRoot)) { $BackupRoot = $config.BackupRoot }
+    if ($config.SourcePath)     { $SourcePath     = $config.SourcePath }
+    if ($config.BackupRoot)     { $BackupRoot     = $config.BackupRoot }
     if ($config.RetentionCount) { $RetentionCount = [int]$config.RetentionCount }
 }
 
-# Ensure backup root exists
-if (-not (Test-Path $BackupRoot)) {
-    Write-BackupLog -Message "BackupRoot does not exist. Creating: $BackupRoot"
-    if ($PSCmdlet.ShouldProcess($BackupRoot, 'Create backup directory')) {
-        New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
-    }
-}
-
-$timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$backupName = "Backup_$timestamp"
-$backupPath = Join-Path -Path $BackupRoot -ChildPath $backupName
-
-Write-BackupLog -Message "Creating backup: $backupPath"
-
-# Create backup with ShouldProcess
-$backupSuccess = $false
-try {
-    if ($PSCmdlet.ShouldProcess($SourcePath, "Backup to $backupPath")) {
-        Copy-Item -Path $SourcePath -Destination $backupPath -Recurse -Force -ErrorAction Stop
-        $backupSuccess = $true
-        Write-BackupLog -Message 'Backup completed.'
-    }
-}
-catch {
-    Write-BackupLog -Message "Backup failed: $($_.Exception.Message)" -Level 'ERROR'
+if (-not (Test-Path -LiteralPath $SourcePath)) {
+    Write-TemplateLog -Message "SourcePath does not exist: $SourcePath" -Level 'ERROR' -LogFile $logFile
     exit 1
 }
 
-# Rotation with ShouldProcess
-Write-BackupLog -Message "Applying retention: keep last $RetentionCount backups."
+if (-not (Test-Path -LiteralPath $BackupRoot)) {
+    Write-TemplateLog -Message "BackupRoot does not exist. Creating: $BackupRoot" -LogFile $logFile
+    $null = New-Item -ItemType Directory -Path $BackupRoot -Force
+}
 
-$backups = Get-ChildItem -Path $BackupRoot -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like 'Backup_*' } |
-    Sort-Object CreationTime -Descending
+$timestamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
+$backupName = "Backup_$timestamp"
+$backupPath = Join-Path -Path $BackupRoot -ChildPath $backupName
 
-$removedCount = 0
-if ($backups.Count -gt $RetentionCount) {
-    $toRemove = $backups | Select-Object -Skip $RetentionCount
+Write-TemplateLog -Message "Creating backup at: $backupPath" -LogFile $logFile
 
-    foreach ($old in $toRemove) {
-        if ($PSCmdlet.ShouldProcess($old.FullName, 'Remove old backup')) {
-            Write-BackupLog -Message "Removing old backup: $($old.FullName)" -Level 'WARN'
-            Remove-Item -Path $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
-            $removedCount++
-        }
+try {
+    if ($PSCmdlet.ShouldProcess($backupPath, "Copy from source '$SourcePath'")) {
+        Copy-Item -Path $SourcePath -Destination $backupPath -Recurse -Force -ErrorAction Stop
+        Write-TemplateLog -Message 'Backup completed.' -LogFile $logFile
+    } else {
+        Write-TemplateLog -Message 'Backup skipped by ShouldProcess/WhatIf.' -Level 'WARN' -LogFile $logFile
     }
 }
-else {
-    Write-BackupLog -Message 'No old backups to remove.'
+catch {
+    Write-TemplateLog -Message "Backup failed: $_" -Level 'ERROR' -LogFile $logFile
+    exit 1
 }
 
-# Return result object
-[PSCustomObject]@{
-    Timestamp      = Get-Date
-    SourcePath     = $SourcePath
-    BackupPath     = $backupPath
-    Success        = $backupSuccess
-    BackupsRemoved = $removedCount
-    BackupsKept    = [Math]::Min($backups.Count, $RetentionCount)
-}
+Write-TemplateLog -Message "Applying retention policy: keep last $RetentionCount backups." -LogFile $logFile
 
-#endregion
+$backups = Get-ChildItem -Path $BackupRoot -Directory |
+           Where-Object { $_.Name -like 'Backup_*' } |
+           Sort-Object CreationTime -Descending
+
+if ($backups.Count -gt $RetentionCount) {
+    $toRemove = $backups | Select-Object -Skip $RetentionCount
+    foreach ($old in $toRemove) {
+        if ($PSCmdlet.ShouldProcess($old.FullName, 'Remove old backup')) {
+            Write-TemplateLog -Message "Removing old backup: $($old.FullName)" -Level 'WARN' -LogFile $logFile
+            Remove-Item -Path $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+} else {
+    Write-TemplateLog -Message 'No old backups to remove.' -LogFile $logFile
+}
