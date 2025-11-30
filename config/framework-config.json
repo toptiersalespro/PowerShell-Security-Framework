@@ -1,0 +1,44 @@
+{
+  "framework": {
+    "name": "PowerShell Security Framework",
+    "version": "1.0.0",
+    "minimumPowerShellVersion": "7.0"
+  },
+  "logging": {
+    "enabled": true,
+    "level": "Information",
+    "path": "${env:USERPROFILE}\\SecurityFramework\\Logs",
+    "retentionDays": 30
+  },
+  "threatDetection": {
+    "maxEventsToScan": 5000,
+    "patterns": {
+      "enabled": true,
+      "customPatternsPath": null
+    },
+    "alertThreshold": {
+      "critical": 1,
+      "high": 5,
+      "medium": 20
+    }
+  },
+  "hardening": {
+    "transcriptionPath": "C:\\ProgramData\\WindowsPowerShell\\Transcripts",
+    "enableScriptBlockLogging": true,
+    "enableTranscription": true
+  },
+  "reconnaissance": {
+    "includeADByDefault": false,
+    "cimNamespaceDepth": 5
+  },
+  "patchManagement": {
+    "maxConcurrentJobs": 5,
+    "wsusOfflineCabUrl": "http://go.microsoft.com/fwlink/?linkid=74689"
+  },
+  "incidentResponse": {
+    "defaultOutputPath": "${env:USERPROFILE}\\IncidentResponse",
+    "collectNetworkConnections": true,
+    "collectProcesses": true,
+    "maxEventsPerCategory": 2000
+  }
+}

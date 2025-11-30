@@ -1,0 +1,26 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "AMSI",
+    "amsi",
+    "Mimikatz",
+    "mimikatz",
+    "sekurlsa",
+    "kerberos",
+    "secedit",
+    "hotfix",
+    "PSStyle",
+    "ADSI",
+    "adsisearcher",
+    "WSUS",
+    "wsusscn",
+    "CIM",
+    "WMI",
+    "GPO",
+    "JEA",
+    "DFIR",
+    "BlueTeam"
+  ],
+  "ignorePaths": ["*.csv", "*.json", "*.log"]
+}

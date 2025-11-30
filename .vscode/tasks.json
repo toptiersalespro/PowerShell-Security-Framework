@@ -1,0 +1,152 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "🔍 Validate PowerShell Module (Full)",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-Command",
+                "${workspaceFolder}/.vscode/scripts/Validate-Module.ps1 -Path '${file}' -Verbose"
+            ],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "⚡ Quick Syntax Check",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "$ast = [System.Management.Automation.Language.Parser]::ParseFile('${file}', [ref]$null, [ref]$errors); if ($errors) { $errors | ForEach-Object { Write-Host \"❌ $_\" -ForegroundColor Red }; exit 1 } else { Write-Host '✅ Syntax Valid' -ForegroundColor Green; exit 0 }"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "silent",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🛡️ PSScriptAnalyzer - Security Only",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Force -Scope CurrentUser }; Import-Module PSScriptAnalyzer; $results = Invoke-ScriptAnalyzer -Path '${file}' -Severity Error,Warning -IncludeRule PSAvoid*,PSUse*; if ($results) { $results | Format-Table -AutoSize; Write-Host \"❌ Found $($results.Count) issues\" -ForegroundColor Red; exit 1 } else { Write-Host '✅ No issues found' -ForegroundColor Green }"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": {
+                "owner": "powershell",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(error|warning|info)\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "🧪 Run Pester Tests for Current File",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "$testFile = '${file}' -replace '\\.psm?1$', '.Tests.ps1'; if (Test-Path $testFile) { Invoke-Pester -Path $testFile -Output Detailed } else { Write-Host \"⚠️ No test file found: $testFile\" -ForegroundColor Yellow }"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🔬 Check Module Initialization Order",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "${workspaceFolder}/.vscode/scripts/Test-ModuleInitialization.ps1 -Path '${file}'"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "📊 Generate Module Health Report",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "${workspaceFolder}/.vscode/scripts/Get-ModuleHealthReport.ps1 -Path '${file}' | Out-Host"
+            ],
+            "group": "test",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🚀 Pre-Commit Validation (All Checks)",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-ExecutionPolicy", "Bypass",
+                "-File",
+                "${workspaceFolder}/.vscode/scripts/Invoke-PreCommitValidation.ps1"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🔧 Auto-Fix Common Issues",
+            "type": "shell",
+            "command": "pwsh",
+            "args": [
+                "-NoProfile",
+                "-Command",
+                "${workspaceFolder}/.vscode/scripts/Repair-ModuleIssues.ps1 -Path '${file}' -WhatIf"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

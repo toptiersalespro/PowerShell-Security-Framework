@@ -1,0 +1,82 @@
+{
+  "version": "2.0.0",
+  "name": "PowerShell Security Framework - AI Configuration",
+  "description": "Enforces TPRS v1.1 and 40 Laws compliance for all PowerShell code generation",
+  "rules": {
+    "mandatory_reading": [
+      "docs/CANONICAL-AI-INSTRUCTION-SET.md"
+    ],
+    "code_generation": {
+      "language": "powershell",
+      "version": "7.4+",
+      "strict_mode": true,
+      "error_action_preference": "Stop",
+      "always_include": [
+        "#Requires -Version 7.4",
+        "Set-StrictMode -Version Latest",
+        "$ErrorActionPreference = 'Stop'"
+      ],
+      "forbidden_patterns": [
+        {
+          "pattern": "function.*param.*\\$script:.*\\).*\\n.*\\$script:",
+          "reason": "Script variable used in parameter default before initialization (DEADLY SIN #1)",
+          "fix": "Initialize all $script: variables BEFORE function declarations"
+        },
+        {
+          "pattern": "\\$\\w+\\.Trim\\(\\)|\\$\\w+\\.Replace\\(|\\$\\w+\\.ToUpper\\(\\)",
+          "reason": "Method call without null check (DEADLY SIN #2)",
+          "fix": "Wrap with: if ([string]::IsNullOrWhiteSpace($var)) { 'default' } else { $var.Method() }"
+        },
+        {
+          "pattern": "catch.*\\n.*return\\s+@\\(\\)",
+          "reason": "Returning untyped @() array in error path (DEADLY SIN #3)",
+          "fix": "Remove return, let end{} block return $results.ToArray()"
+        },
+        {
+          "pattern": "\\$\\w+\\s*=\\s*@\\(\\).*\\n.*\\$\\w+\\s*\\+=",
+          "reason": "Array concatenation with += (O(n²) performance)",
+          "fix": "Use [System.Collections.Generic.List[PSCustomObject]]::new()"
+        }
+      ],
+      "required_attributes": [
+        "[CmdletBinding()]",
+        "[OutputType()]"
+      ],
+      "required_help_sections": [
+        ".SYNOPSIS",
+        ".DESCRIPTION",
+        ".PARAMETER",
+        ".EXAMPLE",
+        ".OUTPUTS"
+      ]
+    },
+    "validation": {
+      "pre_commit": ".vscode/scripts/Invoke-PreCommitValidation.ps1",
+      "analyzer": ".vscode/scripts/PSScriptAnalyzerCustomRules.psm1",
+      "test_framework": "Pester 5.x"
+    }
+  },
+  "templates": {
+    "module": "Templates/L2-Script-Module-Template.psm1",
+    "script": "Templates/L1-Single-Function-Utility-Script-Template.ps1",
+    "automation": "Templates/L3-Automation-Job-Runner-Template.ps1",
+    "test": "Templates/Test-Template.Tests.ps1"
+  },
+  "prompts": {
+    "code_generation": "Generate production-grade PowerShell code following docs/CANONICAL-AI-INSTRUCTION-SET.md. CRITICAL: (1) Initialize all $script: variables BEFORE functions, (2) Use [string]::IsNullOrWhiteSpace() before ALL string methods, (3) Return $results.ToArray() not @(). Include [CmdletBinding()], [OutputType()], and complete comment-based help. Follow Golden Template exactly.",
+    "code_review": "Review this PowerShell code against CANONICAL-AI-INSTRUCTION-SET.md. Check for: (1) Script variables in defaults before initialization, (2) Method calls without null checks, (3) Inconsistent return types. Verify Set-StrictMode, ErrorActionPreference, OutputType attributes, and comment-based help.",
+    "debugging": "Debug this PowerShell code using CANONICAL-AI-INSTRUCTION-SET.md patterns. Common issues: (1) $script: var not initialized before function, (2) .Trim()/.Replace() on null, (3) @() return in catch block. Check module load order and error handling."
+  },
+  "enforcement": {
+    "level": "strict",
+    "block_non_compliant_code": true,
+    "auto_fix": false,
+    "suggestions_only": false
+  },
+  "documentation": {
+    "root_cause_analysis": "docs/AI-TRAINING-ROOT-CAUSE-ANALYSIS.md",
+    "quick_start": "docs/AI-TRAINING-QUICK-START.md",
+    "implementation_summary": "docs/IMPLEMENTATION-SUMMARY.md",
+    "executive_summary": "docs/EXECUTIVE-SUMMARY.md"
+  }
+}

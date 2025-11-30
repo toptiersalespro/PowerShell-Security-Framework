@@ -1,0 +1,19 @@
+#!/bin/sh
+# PowerShell Security Framework - Pre-Commit Hook
+# Automatically validates PowerShell files before commit
+
+echo ""
+echo "🔒 PowerShell Security Framework Pre-Commit Validation"
+echo "════════════════════════════════════════════════════════"
+
+# Check if pwsh is available
+if ! command -v pwsh >/dev/null 2>&1; then
+    echo "⚠️  Warning: PowerShell 7+ not found. Skipping validation."
+    echo "   Install from: https://github.com/PowerShell/PowerShell"
+    exit 0
+fi
+
+# Run the validation script
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$(git rev-parse --show-toplevel)/.vscode/scripts/Invoke-PreCommitValidation.ps1"
+
+exit $?

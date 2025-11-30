@@ -1,0 +1,128 @@
+# Cursor AI Rules - PowerShell Security Framework
+
+## MANDATORY: Read Before Generating ANY PowerShell Code
+**PRIMARY REFERENCE**: `docs/CANONICAL-AI-INSTRUCTION-SET.md`
+
+## The 3 Deadly Sins (NEVER VIOLATE)
+
+### SIN #1: Uninitialized Script Variables in Parameter Defaults
+❌ WRONG:
+```powershell
+function Foo { param([string]$X = $script:Bar) }
+$script:Bar = 'value'  # TOO LATE
+```
+
+✅ CORRECT:
+```powershell
+$script:Bar = 'value'  # FIRST
+function Foo { param([string]$X = $script:Bar) }  # SECOND
+```
+
+### SIN #2: Method Calls Without Null Checks
+❌ WRONG:
+```powershell
+$name.Trim()
+```
+
+✅ CORRECT:
+```powershell
+if ([string]::IsNullOrWhiteSpace($name)) { 'Unknown' } else { $name.Trim() }
+```
+
+### SIN #3: Inconsistent Return Types
+❌ WRONG:
+```powershell
+catch { return @() }  # Object[] type
+end { return $results.ToArray() }  # PSCustomObject[] type
+```
+
+✅ CORRECT:
+```powershell
+catch { Write-Error $_ }  # Don't return
+end { return $results.ToArray() }  # Always consistent
+```
+
+## Code Generation Rules
+
+1. **ALWAYS start with:**
+   ```powershell
+   #Requires -Version 7.4
+   Set-StrictMode -Version Latest
+   $ErrorActionPreference = 'Stop'
+   ```
+
+2. **ALWAYS initialize script variables BEFORE functions:**
+   ```powershell
+   $script:TraceId = ([guid]::NewGuid().ToString('N').Substring(0, 8))
+
+   function Foo { ... }  # After initialization
+   ```
+
+3. **ALWAYS use [string]::IsNullOrWhiteSpace() before method calls:**
+   ```powershell
+   $safe = if ([string]::IsNullOrWhiteSpace($raw)) { 'default' } else { $raw.Trim() }
+   ```
+
+4. **ALWAYS use typed collections:**
+   ```powershell
+   $results = [System.Collections.Generic.List[PSCustomObject]]::new()
+   # NOT: $results = @()
+   ```
+
+5. **ALWAYS declare [CmdletBinding()] and [OutputType()]:**
+   ```powershell
+   function Get-Data {
+       [CmdletBinding()]
+       [OutputType([PSCustomObject[]])]
+       param()
+   ```
+
+6. **ALWAYS include complete comment-based help:**
+   ```powershell
+   <#
+   .SYNOPSIS
+   .DESCRIPTION
+   .PARAMETER
+   .EXAMPLE
+   .OUTPUTS
+   #>
+   ```
+
+7. **NEVER use:**
+   - Aliases (Write-Host → use Write-Verbose)
+   - Positional parameters
+   - `return @()` in error paths
+   - `$array += $item` in loops
+
+8. **ALWAYS return from end{} block:**
+   ```powershell
+   begin { $results = [List[PSCustomObject]]::new() }
+   process { try { ... } catch { Write-Error $_ } }
+   end { return $results.ToArray() }
+   ```
+
+## Templates
+
+Use these as starting points (copy from Templates/):
+- L0: REPL teaching snippets
+- L1: Single function utilities
+- L2: Multi-function modules (.psm1)
+- L3: Automation/job runners
+- Test: Pester test suites
+
+## Validation
+
+Before suggesting code:
+1. Check: Script variables initialized before function declarations?
+2. Check: Method calls have null checks?
+3. Check: Consistent return types?
+4. Check: [CmdletBinding()] and [OutputType()] present?
+5. Check: Complete comment-based help?
+
+## Enforcement Level: STRICT
+Non-compliant code suggestions will be rejected.
+
+## Learn More
+- Full details: `docs/CANONICAL-AI-INSTRUCTION-SET.md`
+- Examples: `docs/AI-TRAINING-QUICK-START.md`
+- Why it matters: `docs/AI-TRAINING-ROOT-CAUSE-ANALYSIS.md`

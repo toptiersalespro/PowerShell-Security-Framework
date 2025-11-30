@@ -1,0 +1,99 @@
+{
+  // PowerShell Extension Settings
+  "powershell.codeFormatting.preset": "OTBS",
+  "powershell.codeFormatting.autoCorrectAliases": true,
+  "powershell.codeFormatting.useConstantStrings": true,
+  "powershell.codeFormatting.useCorrectCasing": true,
+  "powershell.codeFormatting.trimWhitespaceAroundPipe": true,
+  "powershell.codeFormatting.whitespaceBeforeOpenBrace": true,
+  "powershell.codeFormatting.whitespaceBeforeOpenParen": true,
+  "powershell.codeFormatting.whitespaceAroundOperator": true,
+  "powershell.codeFormatting.whitespaceAfterSeparator": true,
+  "powershell.codeFormatting.ignoreOneLineBlock": false,
+  "powershell.codeFormatting.alignPropertyValuePairs": true,
+  "powershell.codeFormatting.addWhitespaceAroundPipe": true,
+
+  // Script Analysis Settings
+  "powershell.scriptAnalysis.enable": true,
+  "powershell.scriptAnalysis.settingsPath": ".vscode/PSScriptAnalyzerSettings.psd1",
+
+  // Integrated Terminal
+  "powershell.integratedConsole.showOnStartup": false,
+  "powershell.integratedConsole.suppressStartupBanner": true,
+
+  // Editor Settings for PowerShell
+  "[powershell]": {
+    "editor.semanticHighlighting.enabled": true,
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": false,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.rulers": [120],
+    "editor.wordWrap": "off",
+    "files.encoding": "utf8bom",
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "explicit"
+    }
+  },
+
+  // File Associations
+  "files.associations": {
+    "*.psm1": "powershell",
+    "*.psd1": "powershell",
+    "*.ps1xml": "xml"
+  },
+
+  // Exclude patterns
+  "files.exclude": {
+    "**/*.dll": true,
+    "**/bin": true,
+    "**/obj": true
+  },
+
+  // Search exclude
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/bower_components": true,
+    "**/*.code-search": true,
+    "**/bin": true,
+    "**/obj": true
+  },
+
+  // Tasks
+  "task.quickOpen.detail": true,
+  "task.quickOpen.skip": false,
+
+  // Problem Matchers
+  "problems.showCurrentInStatus": true,
+
+  // Git
+  "git.enableCommitSigning": false,
+  "git.confirmSync": false,
+
+  // Spell Checker (if using Code Spell Checker extension)
+  "cSpell.enabled": true,
+  "cSpell.enableFiletypes": ["powershell"],
+  "cSpell.customDictionaries": {
+    "project-words": {
+      "name": "project-words",
+      "path": "${workspaceFolder}/.vscode/cspell.json",
+      "addWords": true,
+      "scope": "workspace"
+    }
+  },
+
+  // Custom: Auto-save for better validation feedback
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 2000,
+
+  // Recommended Extensions
+  "extensions.ignoreRecommendations": false,
+
+  // Editor: Show inline suggestions
+  "editor.inlineSuggest.enabled": true,
+
+  // Security: Module validation on open
+  "security.workspace.trust.enabled": true
+}
